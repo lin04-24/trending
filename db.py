@@ -21,10 +21,12 @@ from scraper import TrendingRepo
 
 logger = logging.getLogger("db")
 
-# 建库建表 SQL（IF NOT EXISTS，幂等）
+# 建库建表 SQL（IF NOT EXISTS，幂等）。
+# 库名来自配置（默认 trending）；建库仅指定字符集 utf8mb4，
+# 排序规则跟随服务器默认（MySQL 8 为 utf8mb4_0900_ai_ci），不强制覆盖。
 DDL_DATABASE = """
-CREATE DATABASE IF NOT EXISTS github_trending
-  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+CREATE DATABASE IF NOT EXISTS {db_name}
+  DEFAULT CHARACTER SET utf8mb4
 """
 
 DDL_TABLE = """
@@ -42,7 +44,7 @@ CREATE TABLE IF NOT EXISTS repos (
   last_seen    DATETIME NOT NULL COMMENT '最近一次出现在 trending',
   star_total   INT UNSIGNED DEFAULT 0,
   INDEX idx_last_seen (last_seen)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
 
@@ -108,11 +110,12 @@ def connect(
     if init:
         try:
             with conn.cursor() as cur:
-                cur.execute(DDL_DATABASE)
+                cur.execute(DDL_DATABASE.format(db_name=cfg.db_name))
                 cur.execute(DDL_TABLE)
             conn.commit()
             logger.info(
-                "数据库就绪: %s.repos（自动建库建表幂等）", cfg.db_name
+                "数据库就绪: %s.repos（utf8mb4 + 服务器默认排序规则，幂等）",
+                cfg.db_name,
             )
         except pymysql.MySQLError as e:
             conn.close()

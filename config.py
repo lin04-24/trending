@@ -48,6 +48,7 @@ REQUIRED_KEYS: dict[str, str] = {
 DEFAULTS: dict[str, str] = {
     "PANEL_APP_PORT_HTTP": "3306",  # 1Panel 语义：MySQL 对外端口
     "SEND_PORT": "465",
+    "DB_NAME": "trending",           # 数据库名（云服务器实际创建的库名）
 }
 
 
@@ -74,7 +75,7 @@ class AppConfig:
     db_host: str = "127.0.0.1"
     db_port: int = 3306
     db_password: str = ""
-    db_name: str = "github_trending"
+    db_name: str = "trending"
     container_name: str = "1Panel-mysql-wMbD"
 
     # SMTP
@@ -148,6 +149,7 @@ def load(
     return AppConfig(
         db_port=_int("PANEL_APP_PORT_HTTP", 3306),
         db_password=values["PANEL_DB_ROOT_PASSWORD"].strip(),
+        db_name=(values.get("DB_NAME") or "trending").strip(),
         container_name=(values.get("CONTAINER_NAME") or "1Panel-mysql-wMbD").strip(),
         smtp_port=_int("SEND_PORT", 465),
         send_mail=values["SEND_MAIL"].strip(),

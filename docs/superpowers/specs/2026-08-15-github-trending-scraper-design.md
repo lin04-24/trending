@@ -79,11 +79,11 @@ F:\1\trending\
 
 ## 4. 数据库设计
 
-数据库 `github_trending`，单表 `repos`（utf8mb4，Asia/Shanghai 时区）：
+数据库 `trending`（云服务器已建），单表 `repos`（utf8mb4，排序规则跟随服务器默认，Asia/Shanghai 时区）：
 
 ```sql
-CREATE DATABASE IF NOT EXISTS github_trending
-  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS trending
+  DEFAULT CHARACTER SET utf8mb4;   -- 排序规则用 MySQL 8 默认 utf8mb4_0900_ai_ci
 
 CREATE TABLE IF NOT EXISTS repos (
   id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS repos (
 
 - 去重：`repo_key` 唯一索引；入库统一 `INSERT ... ON DUPLICATE KEY UPDATE last_seen = VALUES(last_seen), star_total = VALUES(star_total)`
 - 自动初始化：首次运行自动建库建表，无需手动 init
-- 连接：PyMySQL → `127.0.0.1:3306`，root + env 中的 `PANEL_DB_ROOT_PASSWORD`
+- 连接：PyMySQL → `127.0.0.1:3306`，root + env 中的 `PANEL_DB_ROOT_PASSWORD`；库名可经 env `DB_NAME` 覆盖（默认 `trending`）
 
 ---
 
