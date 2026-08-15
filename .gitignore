@@ -1,0 +1,19 @@
+# 密钥与环境
+env
+.env
+*.env
+
+# 运行产物
+logs/
+data/
+conf/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
