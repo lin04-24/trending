@@ -7,6 +7,7 @@ env
 logs/
 data/
 conf/
+mail_preview.html
 
 # Python
 __pycache__/
