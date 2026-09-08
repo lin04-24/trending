@@ -4,8 +4,10 @@
   中文名 / 小介绍（≤30字）/ 中文分类 / 大介绍（≤300字，不含安装类内容）
 
 兜底链（设计 §5.3）：
-  中文 README 精简失败 -> 英文翻译失败 -> description 原文
-超时 60s，失败重试 1 次；解析失败正则提取 {...}。
+  主供应商（首次 + 重试2次）-> 副供应商（如配置，首次 + 重试1次）-> description 原文
+
+渠道故障判定：大介绍汉字数低于阈值（如整段返回英文）视为本次生成失败，
+沿重试链降级。超时 60s，重试间递增间隔（2s → 4s）；解析失败正则提取 {...}。
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ from config import AppConfig
 
 logger = logging.getLogger("llm")
 
-# LLM 调用超时（秒）与重试次数
+# LLM 调用超时（秒）与重试策略
 LLM_TIMEOUT = 60
-LLM_MAX_ATTEMPTS = 2          # 首次 + 重试 1 次
+PRIMARY_MAX_ATTEMPTS = 3      # 主供应商：首次 + 重试 2 次
+BACKUP_MAX_ATTEMPTS = 2       # 副供应商：首次 + 重试 1 次
+RETRY_BACKOFF_BASE = 2        # 重试间隔基数（秒）：第 n 次失败后等 n*base
 
 # 小介绍字数上限（提示词约束）；大介绍仅设宽松安全上限，防止 LLM 失控输出，
 # 正常略超 300 字不截断（邮件端默认折叠展示，超长不影响浏览）
@@ -34,6 +38,12 @@ BRIEF_INTRO_LIMIT = 30
 # 四项字段长度硬限（入库保护，VARCHAR(300)/VARCHAR(50)）
 _BRIEF_DB_LIMIT = 300
 _CATEGORY_DB_LIMIT = 50
+
+# 大介绍汉字数下限：低于该值判定为供应商渠道失败（如整段返回英文），
+# 触发重试 / 切换副供应商。正常 300 字中文介绍远高于此值。
+FULL_INTRO_MIN_HANZI = 50
+
+_HANZI_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 class LLMError(Exception):
@@ -129,13 +139,97 @@ def _fallback(repo_desc: str | None, repo_name: str, elapsed: float) -> RepoSumm
     )
 
 
-def _client(cfg: AppConfig) -> OpenAI:
+def _hanzi_count(text: str) -> int:
+    """汉字数量（CJK 基本区），用于判定产出是否为中文。"""
+    return len(_HANZI_RE.findall(text))
+
+
+@dataclass(frozen=True)
+class _Provider:
+    """一个供应商渠道及其重试预算。"""
+
+    label: str
+    base_url: str
+    model: str
+    api_key: str
+    max_attempts: int
+
+
+def _providers(cfg: AppConfig) -> list[_Provider]:
+    """主 -> 副供应商链条；副供应商三项任缺其一即视为未配置。"""
+    chain = [
+        _Provider(
+            "主供应商", cfg.llm_base_url, cfg.llm_model,
+            cfg.llm_api_key, PRIMARY_MAX_ATTEMPTS,
+        )
+    ]
+    if all(
+        (cfg.llm_backup_base_url, cfg.llm_backup_model, cfg.llm_backup_api_key)
+    ):
+        chain.append(
+            _Provider(
+                "副供应商", cfg.llm_backup_base_url, cfg.llm_backup_model,
+                cfg.llm_backup_api_key, BACKUP_MAX_ATTEMPTS,
+            )
+        )
+    else:
+        logger.debug(
+            "副供应商未配置（LLM_BACKUP_BASE_URL/MODEL/API_KEY 需同时填写），"
+            "主供应商重试耗尽后直接兜底"
+        )
+    return chain
+
+
+def _make_client(base_url: str, api_key: str) -> OpenAI:
     return OpenAI(
-        base_url=cfg.llm_base_url,
-        api_key=cfg.llm_api_key,
+        base_url=base_url,
+        api_key=api_key,
         timeout=LLM_TIMEOUT,
         max_retries=0,          # 重试由本模块控制
     )
+
+
+def _call_once(client: OpenAI, model: str, user_prompt: str) -> dict[str, str]:
+    """单次调用 + 产出校验；任何不合格均抛 LLMError（重试与否由调用方决定）。"""
+    kwargs: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.3,
+    }
+    try:
+        # response_format 若网关支持则启用严格 JSON
+        resp = client.chat.completions.create(
+            **kwargs, response_format={"type": "json_object"}
+        )
+    except Exception as e_fmt:  # noqa: BLE001 - 网关兼容性探测
+        warn = str(e_fmt)
+        if any(
+            kw in warn.lower()
+            for kw in ("response_format", "json_object", "json mode")
+        ):
+            logger.info("网关不支持 response_format，改用提示词约束")
+            resp = client.chat.completions.create(**kwargs)
+        else:
+            raise
+
+    raw = resp.choices[0].message.content
+    if not raw:
+        raise LLMError("LLM 返回空内容")
+    data = parse_llm_json(raw)
+
+    full = data.get("大介绍") or ""
+    if not full:
+        raise LLMError("大介绍为空")
+    hanzi = _hanzi_count(full)
+    if hanzi < FULL_INTRO_MIN_HANZI:
+        raise LLMError(
+            f"大介绍仅 {hanzi} 个汉字（阈值 {FULL_INTRO_MIN_HANZI}），"
+            "疑似渠道故障返回英文"
+        )
+    return data
 
 
 def summarize(
@@ -147,84 +241,61 @@ def summarize(
 ) -> RepoSummary:
     """一次 LLM 调用生成四项中文内容。任何失败 -> 兜底（不抛异常）。
 
+    重试链：主供应商 首次+重试2次 -> 副供应商（如配置）首次+重试1次。
     单项目 LLM 失败不影响整体流水线（设计 §3.3）。
     """
     import time as _time
 
     started = _time.perf_counter()
-    client = _client(cfg)
     user_prompt = _build_user_prompt(repo_name, description, readme, is_chinese_readme)
 
     last_err: Exception | None = None
-    for attempt in range(1, LLM_MAX_ATTEMPTS + 1):
-        try:
-            kwargs: dict = {
-                "model": cfg.llm_model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.3,
-            }
+    for prov in _providers(cfg):
+        client = _make_client(prov.base_url, prov.api_key)
+        for attempt in range(1, prov.max_attempts + 1):
             try:
-                # response_format 若网关支持则启用严格 JSON
-                resp = client.chat.completions.create(
-                    **kwargs, response_format={"type": "json_object"}
+                data = _call_once(client, prov.model, user_prompt)
+
+                zh_name = data.get("中文名") or repo_name
+                brief = data.get("小介绍") or ""
+                category = data.get("中文分类") or "未分类"
+                if not brief:
+                    brief = f"{zh_name}：详见大介绍"
+
+                elapsed = _time.perf_counter() - started
+                logger.info(
+                    "LLM 完成 %s：%s %.1fs（%s/%s）",
+                    repo_name, prov.label, elapsed, category, zh_name,
                 )
-            except Exception as e_fmt:  # noqa: BLE001 - 网关兼容性探测
-                warn = str(e_fmt)
-                if any(
-                    kw in warn.lower()
-                    for kw in ("response_format", "json_object", "json mode")
-                ):
-                    logger.info("网关不支持 response_format，改用提示词约束")
-                    resp = client.chat.completions.create(**kwargs)
+                return RepoSummary(
+                    zh_name=_truncate(zh_name, 100),
+                    brief_intro=_truncate(brief, _BRIEF_DB_LIMIT),
+                    category=_truncate(category, _CATEGORY_DB_LIMIT),
+                    full_intro=_truncate(data["大介绍"], FULL_INTRO_LIMIT),
+                    llm_ok=True,
+                    elapsed=elapsed,
+                )
+
+            except Exception as e:  # noqa: BLE001 - 失败沿重试链降级
+                last_err = e
+                if attempt < prov.max_attempts:
+                    delay = RETRY_BACKOFF_BASE * attempt
+                    logger.warning(
+                        "%s 第 %d/%d 次失败 %s: %s，%ds 后重试",
+                        prov.label, attempt, prov.max_attempts, repo_name, e, delay,
+                    )
+                    _time.sleep(delay)
                 else:
-                    raise
+                    logger.error(
+                        "%s 重试耗尽 %s: %s（%.1fs）",
+                        prov.label, repo_name, e, _time.perf_counter() - started,
+                    )
 
-            raw = resp.choices[0].message.content
-            if not raw:
-                raise LLMError("LLM 返回空内容")
-            data = parse_llm_json(raw)
-
-            zh_name = data.get("中文名") or repo_name
-            brief = data.get("小介绍") or ""
-            category = data.get("中文分类") or "未分类"
-            full = data.get("大介绍") or ""
-
-            if not full:
-                raise LLMError("大介绍为空")
-            if not brief:
-                brief = f"{zh_name}：详见大介绍"
-
-            elapsed = _time.perf_counter() - started
-            logger.info(
-                "LLM 完成 %s：%.1fs（%s/%s）",
-                repo_name, elapsed, category, zh_name,
-            )
-            return RepoSummary(
-                zh_name=_truncate(zh_name, 100),
-                brief_intro=_truncate(brief, _BRIEF_DB_LIMIT),
-                category=_truncate(category, _CATEGORY_DB_LIMIT),
-                full_intro=_truncate(full, FULL_INTRO_LIMIT),
-                llm_ok=True,
-                elapsed=elapsed,
-            )
-
-        except Exception as e:  # noqa: BLE001 - 任何失败均兜底
-            last_err = e
-            elapsed = _time.perf_counter() - started
-            if attempt < LLM_MAX_ATTEMPTS:
-                logger.warning(
-                    "LLM 第 %d 次失败 %s: %s，重试", attempt, repo_name, e
-                )
-            else:
-                logger.error(
-                    "LLM 重试后仍失败 %s: %s（%.1fs），使用 description 兜底",
-                    repo_name, e, elapsed,
-                )
-
-    return _fallback(description, repo_name, _time.perf_counter() - started)  # type: ignore[return-value]
+    logger.error(
+        "全部供应商失败 %s: %s（%.1fs），使用 description 兜底",
+        repo_name, last_err, _time.perf_counter() - started,
+    )
+    return _fallback(description, repo_name, _time.perf_counter() - started)
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +337,12 @@ def _self_test() -> int:
     except LLMError:
         check("非法输入报错", True)
 
-    print(f"\n解析自检 {ok}/5 通过")
-    return 0 if ok == 5 else 1
+    # 汉字计数（渠道故障判定依据）
+    check("汉字计数（中文）", _hanzi_count("这是一个用于测试的中文介绍") == 13)
+    check("汉字计数（英文/空）", _hanzi_count("Open source server, built with Rust!") == 0)
+
+    print(f"\n解析自检 {ok}/7 通过")
+    return 0 if ok == 7 else 1
 
 
 def _live_test() -> int:
@@ -278,7 +353,13 @@ def _live_test() -> int:
     from config import load
 
     cfg = load()
-    print(f"[实调] {cfg.llm_base_url} 模型 {cfg.llm_model}")
+    print(f"[实调] 主供应商 {cfg.llm_base_url} 模型 {cfg.llm_model}")
+    if cfg.llm_backup_base_url:
+        print(
+            f"[实调] 副供应商 {cfg.llm_backup_base_url} 模型 {cfg.llm_backup_model}"
+        )
+    else:
+        print("[实调] 副供应商未配置")
     s = summarize(
         cfg,
         repo_name="ripgrep",

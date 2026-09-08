@@ -114,6 +114,11 @@ vim .env
 | `LLM_BASE_URL` | OpenAI 兼容接口地址（以 `/v1` 结尾，如 `https://api.openai.com/v1` 或任意中转网关） |
 | `LLM_MODEL` | 模型名 |
 | `LLM_API_KEY` | 对应的 API Key |
+| `LLM_BACKUP_BASE_URL` | 副供应商接口地址（可选，与下面两项**同时填写才启用**） |
+| `LLM_BACKUP_MODEL` | 副供应商模型名 |
+| `LLM_BACKUP_API_KEY` | 副供应商 API Key |
+
+LLM 重试链：主供应商「首次 + 重试 2 次」均失败（含大介绍汉字数低于阈值 50 的渠道故障，如整段返回英文）后，自动切换副供应商「首次 + 重试 1 次」；全部失败用 GitHub 简介兜底，单项目不拖垮整体。副供应商留空时，主供应商失败后直接兜底。
 
 `.env` 已被 `.gitignore` 忽略，请勿提交或转发。
 

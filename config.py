@@ -5,6 +5,7 @@
               PostgreSQL_NAME（账号）/ PostgreSQL_KEY（密码）[/ DB_NAME 库名]
   SMTP  : SEND_MAIL / SEND_KEY / ACCEPT_MAIL / SEND_PORT
   其他  : GITHUB_TOKEN / LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+          [/ LLM_BACKUP_BASE_URL / LLM_BACKUP_MODEL / LLM_BACKUP_API_KEY 副供应商，可选]
 """
 
 from __future__ import annotations
@@ -60,6 +61,10 @@ DEFAULTS: dict[str, str] = {
     "PostgreSQL_PORTS": "5432",     # PostgreSQL 默认端口
     "SEND_PORT": "465",
     "DB_NAME": "trending",          # 数据库名
+    # LLM 副供应商（可选）：三项同时填写才启用，主供应商重试耗尽后切换
+    "LLM_BACKUP_BASE_URL": "",
+    "LLM_BACKUP_MODEL": "",
+    "LLM_BACKUP_API_KEY": "",
 }
 
 
@@ -103,6 +108,11 @@ class AppConfig:
     llm_base_url: str = ""
     llm_model: str = ""
     llm_api_key: str = ""
+
+    # LLM 副供应商（可选；主供应商重试耗尽后启用）
+    llm_backup_base_url: str = ""
+    llm_backup_model: str = ""
+    llm_backup_api_key: str = ""
 
     # 业务
     since: str = "weekly"
@@ -173,6 +183,9 @@ def load(
         llm_base_url=values["LLM_BASE_URL"].strip().rstrip("/"),
         llm_model=values["LLM_MODEL"].strip(),
         llm_api_key=values["LLM_API_KEY"].strip(),
+        llm_backup_base_url=values["LLM_BACKUP_BASE_URL"].strip().rstrip("/"),
+        llm_backup_model=values["LLM_BACKUP_MODEL"].strip(),
+        llm_backup_api_key=values["LLM_BACKUP_API_KEY"].strip(),
         since=since,
     )
 
@@ -266,4 +279,10 @@ if __name__ == "__main__":
     print(f"  收件人     : {', '.join(cfg.accept_mails)}")
     print(f"  GitHub PAT : {cfg.github_token[:7]}…（已配置）")
     print(f"  LLM        : {cfg.llm_base_url} / 模型 {cfg.llm_model}")
+    if cfg.llm_backup_base_url:
+        print(
+            f"  LLM 副供应商: {cfg.llm_backup_base_url} / 模型 {cfg.llm_backup_model}"
+        )
+    else:
+        print("  LLM 副供应商: 未配置（主供应商失败后直接兜底）")
     print(f"  当前上海时间: {now_shanghai().strftime('%Y-%m-%d %H:%M:%S')}")
