@@ -6,10 +6,10 @@
 
 - **趋势爬取**：解析 `github.com/trending`，支持 `daily / weekly / monthly` 三种周期（`--since` 参数），提取项目名、语言、简介、总星数与本周期新增星数；失败自动重试（指数退避 + 抖动）。
 - **永久去重**：以 `作者/项目名` 为唯一键存入 PostgreSQL，一次入库终身去重；老项目仅更新 `last_seen` 与星数，不重复调用 LLM。首次运行自动建库、建表，无需手动初始化 SQL。
-- **LLM 中文介绍**：调用任意 OpenAI 兼容接口，一次生成四项内容——中文名、小介绍（≤30 字）、中文分类（如"AI 工具 / 前端框架 / 命令行工具…"）、大介绍（≤300 字，自动排除安装、构建等操作性内容）。
+- **LLM 中文介绍**：调用任意 OpenAI 兼容接口，一次生成四项内容——中文名、小介绍（≤30 字）、中文分类（如"AI 工具 / 前端框架 / 命令行工具…"）、大介绍（≤300 字，自动排除安装、构建等操作性内容）；生成温度可通过 `LLM_TEMPERATURE` 配置（0~2，默认 0.3，主副供应商共用）。
 - **中文 README 优先**：优先发现并使用项目自带的中文 README（`README.zh-CN.md` 等），经 GitHub API 下载、不依赖国内常不可达的 raw 域名；无中文版时将英文 README 送 LLM 翻译精简。
 - **QQ 邮箱推送**：SMTP_SSL 465 端口发送 `multipart/alternative` 邮件；HTML 模板全内联 CSS（兼容 QQ 邮箱客户端剥离 `<style>` 的行为），新项目大卡片 + `<details>` 折叠大介绍，老项目灰底简列，另附纯文本降级版本；支持多收件人。
-- **失败兜底设计**：单个项目失败不拖垮整体；入库先于发邮件且独立提交，邮件失败不回滚数据库（下次运行该项目按已存在处理，不重推）；LLM 失败自动降级为项目 description 原文。
+- **失败兜底设计**：单个项目失败不拖垮整体；入库先于发邮件且独立提交，邮件失败不回滚数据库（下次运行该项目按已存在处理，不重推）；LLM 调用沿主→副供应商重试链降级（含整段返回英文的渠道故障判定），全部失败自动降级为项目 description 原文。
 - **演练与冒烟**：`--dry-run` 不发邮件不写库（HTML 落地为 `mail_preview.html` 预览）；`--no-llm` 配合 dry-run 用假数据完全离线跑通流水线；`--limit N` 只处理前 N 个项目。
 - **日志留痕**：按上海日期滚动写 `logs/trending-YYYY-MM-DD.log`，全程记录每一步决策。
 - **自检入口**：`config.py`、`scraper.py`、`db.py`、`llm.py`、`mailer.py` 均支持以 `python3 xxx.py` / `python3 -m xxx` 方式单独自检，便于部署时分段排障。
@@ -114,6 +114,7 @@ vim .env
 | `LLM_BASE_URL` | OpenAI 兼容接口地址（以 `/v1` 结尾，如 `https://api.openai.com/v1` 或任意中转网关） |
 | `LLM_MODEL` | 模型名 |
 | `LLM_API_KEY` | 对应的 API Key |
+| `LLM_TEMPERATURE` | 生成温度（可选，0~2，默认 `0.3`）：主副供应商共用，越低输出越稳定，适合 JSON 结构化中文生成 |
 | `LLM_BACKUP_BASE_URL` | 副供应商接口地址（可选，与下面两项**同时填写才启用**） |
 | `LLM_BACKUP_MODEL` | 副供应商模型名 |
 | `LLM_BACKUP_API_KEY` | 副供应商 API Key |
@@ -201,4 +202,5 @@ git pull
 
 ## 版本
 
+- **v1.2**：LLM 主副供应商重试链（主供应商首次+重试 2 次均失败后自动切换副供应商首次+重试 1 次，副供应商三项 env 可选配置）；新增 `LLM_TEMPERATURE` 生成温度配置（0~2，默认 0.3，主副供应商共用，非法或越界自动回落并告警）；大介绍汉字数低于 50 判定为渠道故障并沿重试链降级。见 [Releases](https://github.com/lin04-24/trending/releases)。
 - **v1.0**：首个正式版本。六模块流水线（scraper / llm / db / mailer / config / main），PostgreSQL 存储，QQ 邮箱推送，dry-run 演练与分段自检，见 [Releases](https://github.com/lin04-24/trending/releases)。

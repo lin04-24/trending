@@ -6,6 +6,7 @@
 兜底链（设计 §5.3）：
   主供应商（首次 + 重试2次）-> 副供应商（如配置，首次 + 重试1次）-> description 原文
 
+生成温度由 env 的 LLM_TEMPERATURE 控制（默认 0.3，主副供应商共用）。
 渠道故障判定：大介绍汉字数低于阈值（如整段返回英文）视为本次生成失败，
 沿重试链降级。超时 60s，重试间递增间隔（2s → 4s）；解析失败正则提取 {...}。
 """
@@ -189,7 +190,9 @@ def _make_client(base_url: str, api_key: str) -> OpenAI:
     )
 
 
-def _call_once(client: OpenAI, model: str, user_prompt: str) -> dict[str, str]:
+def _call_once(
+    client: OpenAI, model: str, user_prompt: str, temperature: float
+) -> dict[str, str]:
     """单次调用 + 产出校验；任何不合格均抛 LLMError（重试与否由调用方决定）。"""
     kwargs: dict = {
         "model": model,
@@ -197,7 +200,7 @@ def _call_once(client: OpenAI, model: str, user_prompt: str) -> dict[str, str]:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.3,
+        "temperature": temperature,
     }
     try:
         # response_format 若网关支持则启用严格 JSON
@@ -254,7 +257,7 @@ def summarize(
         client = _make_client(prov.base_url, prov.api_key)
         for attempt in range(1, prov.max_attempts + 1):
             try:
-                data = _call_once(client, prov.model, user_prompt)
+                data = _call_once(client, prov.model, user_prompt, cfg.llm_temperature)
 
                 zh_name = data.get("中文名") or repo_name
                 brief = data.get("小介绍") or ""

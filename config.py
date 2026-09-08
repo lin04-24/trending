@@ -6,6 +6,7 @@
   SMTP  : SEND_MAIL / SEND_KEY / ACCEPT_MAIL / SEND_PORT
   其他  : GITHUB_TOKEN / LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
           [/ LLM_BACKUP_BASE_URL / LLM_BACKUP_MODEL / LLM_BACKUP_API_KEY 副供应商，可选]
+          [/ LLM_TEMPERATURE 生成温度，可选，默认 0.3]
 """
 
 from __future__ import annotations
@@ -65,6 +66,8 @@ DEFAULTS: dict[str, str] = {
     "LLM_BACKUP_BASE_URL": "",
     "LLM_BACKUP_MODEL": "",
     "LLM_BACKUP_API_KEY": "",
+    # 生成温度：结构化 JSON 中文生成取低温更稳（0~2，OpenAI 兼容接口约定范围）
+    "LLM_TEMPERATURE": "0.3",
 }
 
 
@@ -108,6 +111,7 @@ class AppConfig:
     llm_base_url: str = ""
     llm_model: str = ""
     llm_api_key: str = ""
+    llm_temperature: float = 0.3   # 主副供应商共用
 
     # LLM 副供应商（可选；主供应商重试耗尽后启用）
     llm_backup_base_url: str = ""
@@ -169,6 +173,20 @@ def load(
             logger.warning("%s=%r 非法，使用默认 %d", key, raw, fallback)
             return fallback
 
+    def _float(key: str, fallback: float) -> float:
+        raw = (values.get(key) or "").strip()
+        if not raw:
+            return fallback
+        try:
+            val = float(raw)
+        except ValueError:
+            logger.warning("%s=%r 非法，使用默认 %g", key, raw, fallback)
+            return fallback
+        if not 0.0 <= val <= 2.0:
+            logger.warning("%s=%r 超出 0~2 范围，使用默认 %g", key, raw, fallback)
+            return fallback
+        return val
+
     return AppConfig(
         db_host=(values.get("PostgreSQL_IDRESS") or "127.0.0.1").strip(),
         db_port=_int("PostgreSQL_PORTS", 5432),
@@ -183,6 +201,7 @@ def load(
         llm_base_url=values["LLM_BASE_URL"].strip().rstrip("/"),
         llm_model=values["LLM_MODEL"].strip(),
         llm_api_key=values["LLM_API_KEY"].strip(),
+        llm_temperature=_float("LLM_TEMPERATURE", 0.3),
         llm_backup_base_url=values["LLM_BACKUP_BASE_URL"].strip().rstrip("/"),
         llm_backup_model=values["LLM_BACKUP_MODEL"].strip(),
         llm_backup_api_key=values["LLM_BACKUP_API_KEY"].strip(),
@@ -278,7 +297,7 @@ if __name__ == "__main__":
     print(f"  SMTP       : {cfg.smtp_host}:{cfg.smtp_port} 发件 {cfg.send_mail}")
     print(f"  收件人     : {', '.join(cfg.accept_mails)}")
     print(f"  GitHub PAT : {cfg.github_token[:7]}…（已配置）")
-    print(f"  LLM        : {cfg.llm_base_url} / 模型 {cfg.llm_model}")
+    print(f"  LLM        : {cfg.llm_base_url} / 模型 {cfg.llm_model} / 温度 {cfg.llm_temperature}")
     if cfg.llm_backup_base_url:
         print(
             f"  LLM 副供应商: {cfg.llm_backup_base_url} / 模型 {cfg.llm_backup_model}"
