@@ -26,8 +26,9 @@ logger = logging.getLogger("llm")
 LLM_TIMEOUT = 60
 LLM_MAX_ATTEMPTS = 2          # 首次 + 重试 1 次
 
-# 大介绍 / 小介绍字数上限
-FULL_INTRO_LIMIT = 300
+# 小介绍字数上限（提示词约束）；大介绍仅设宽松安全上限，防止 LLM 失控输出，
+# 正常略超 300 字不截断（邮件端默认折叠展示，超长不影响浏览）
+FULL_INTRO_LIMIT = 1000
 BRIEF_INTRO_LIMIT = 30
 
 # 四项字段长度硬限（入库保护，VARCHAR(300)/VARCHAR(50)）

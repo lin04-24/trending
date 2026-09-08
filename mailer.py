@@ -4,7 +4,8 @@
   - multipart/alternative（text/html + 纯文本备用）
   - 全部内联 CSS（QQ 客户端剥离 <style> 标签）
   - max-width 640px / width 100% / 系统字体栈
-  - 新项目大卡片 + 老项目灰底简列 + 页脚
+  - 新项目大卡片（小介绍常驻，大介绍 <details> 默认收起）
+    + 老项目灰底简列 + 页脚
   - 发送失败重试 2 次；失败不回滚数据库
 """
 
@@ -131,7 +132,12 @@ def render_html(
 
 
 def _render_card(card: NewItemCard) -> str:
-    """单张新项目卡片：中文名大标题 / 英文名 / 徽章 / 链接 / 大介绍 / 收录时间。"""
+    """单张新项目卡片：中文名大标题 / 英文名 / 徽章 / 链接 / 折叠介绍 / 收录时间。
+
+    大介绍用 <details> 默认收起：小介绍常驻展示，点开才看全文。
+    纯 HTML 折叠，不依赖 <style>/JS（QQ 邮箱会剥离二者）；
+    客户端不支持该标签时自动降级为平铺全文，内容不丢失。
+    """
     r, s = card.repo, card.summary
     badges: list[str] = []
     if r.language:
@@ -155,7 +161,11 @@ def _render_card(card: NewItemCard) -> str:
             border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;">
      在 GitHub 查看
   </a>
-  <div style="margin-top:14px;font-size:14px;color:#1f2328;line-height:1.8;">{_esc(s.full_intro)}</div>
+  <div style="margin-top:14px;font-size:14px;color:#1f2328;line-height:1.8;">{_esc(s.brief_intro)}</div>
+  <details style="margin-top:10px;">
+    <summary style="font-size:13px;color:{PRIMARY};cursor:pointer;outline:none;">查看详细介绍 ▾</summary>
+    <div style="margin-top:8px;font-size:14px;color:#1f2328;line-height:1.8;">{_esc(s.full_intro)}</div>
+  </details>
   <div style="margin-top:12px;font-size:12px;color:{GRAY_TEXT};">首次收录：{_esc(card.first_seen)}</div>
 </div>"""
 

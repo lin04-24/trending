@@ -1,9 +1,10 @@
-"""config.py — 读取 env 文件，集中管理配置并校验必填项。
+"""config.py — 读取凭据文件（.env 优先，旧名 env 兼容），集中管理配置并校验必填项。
 
-键名沿用项目现有 env 文件（1Panel 导出），不做重命名：
-  MySQL : PANEL_DB_ROOT_PASSWORD / PANEL_APP_PORT_HTTP / CONTAINER_NAME
+键名沿用文件现有命名，不做重命名：
+  PostgreSQL: PostgreSQL_IDRESS（地址）/ PostgreSQL_PORTS（端口）
+              PostgreSQL_NAME（账号）/ PostgreSQL_KEY（密码）[/ DB_NAME 库名]
   SMTP  : SEND_MAIL / SEND_KEY / ACCEPT_MAIL / SEND_PORT
-  新增  : GITHUB_TOKEN / LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+  其他  : GITHUB_TOKEN / LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
 """
 
 from __future__ import annotations
@@ -22,8 +23,16 @@ logger = logging.getLogger("config")
 
 # 项目根目录 = 本文件所在目录
 PROJECT_ROOT = Path(__file__).resolve().parent
-ENV_FILE = PROJECT_ROOT / "env"
 LOG_DIR = PROJECT_ROOT / "logs"
+
+
+def _default_env_file() -> Path:
+    """凭据文件优先 .env，其次旧名 env（两者都在时 .env 生效）。"""
+    for name in (".env", "env"):
+        p = PROJECT_ROOT / name
+        if p.is_file():
+            return p
+    return PROJECT_ROOT / ".env"
 
 
 class ConfigError(Exception):
@@ -34,7 +43,9 @@ class ConfigError(Exception):
 # 必填键定义：env 键名 -> 用途说明（缺失时报错列出）
 # ---------------------------------------------------------------------------
 REQUIRED_KEYS: dict[str, str] = {
-    "PANEL_DB_ROOT_PASSWORD": "MySQL root 密码（1Panel 容器）",
+    "PostgreSQL_IDRESS": "PostgreSQL 地址（主机名或 IP）",
+    "PostgreSQL_NAME": "PostgreSQL 账号",
+    "PostgreSQL_KEY": "PostgreSQL 密码",
     "SEND_MAIL": "QQ 发件邮箱",
     "SEND_KEY": "QQ 邮箱 SMTP 授权码",
     "ACCEPT_MAIL": "收件邮箱（逗号分隔可多个）",
@@ -46,9 +57,9 @@ REQUIRED_KEYS: dict[str, str] = {
 
 # 可选键及默认值
 DEFAULTS: dict[str, str] = {
-    "PANEL_APP_PORT_HTTP": "3306",  # 1Panel 语义：MySQL 对外端口
+    "PostgreSQL_PORTS": "5432",     # PostgreSQL 默认端口
     "SEND_PORT": "465",
-    "DB_NAME": "trending",           # 数据库名（云服务器实际创建的库名）
+    "DB_NAME": "trending",          # 数据库名
 }
 
 
@@ -71,12 +82,12 @@ def _parse_accept_mail(raw: str) -> list[str]:
 class AppConfig:
     """全局配置（不可变），由 load() 构造。"""
 
-    # MySQL
+    # PostgreSQL
     db_host: str = "127.0.0.1"
-    db_port: int = 3306
+    db_port: int = 5432
+    db_user: str = ""
     db_password: str = ""
     db_name: str = "trending"
-    container_name: str = "1Panel-mysql-wMbD"
 
     # SMTP
     smtp_host: str = "smtp.qq.com"
@@ -114,7 +125,7 @@ def load(
     - since 仅接受 daily/weekly/monthly
     - extra 允许调用方覆盖个别键（测试用）
     """
-    path = env_file or ENV_FILE
+    path = env_file or _default_env_file()
     values: dict[str, str] = {k: "" for k in REQUIRED_KEYS}
     values.update(DEFAULTS)
 
@@ -122,7 +133,7 @@ def load(
         file_vals = dotenv_values(path)
         values.update({k: v for k, v in file_vals.items() if v is not None})
     else:
-        logger.warning("env 文件不存在: %s", path)
+        logger.warning("凭据文件不存在: %s", path)
 
     if extra:
         values.update(extra)
@@ -140,6 +151,8 @@ def load(
 
     def _int(key: str, fallback: int) -> int:
         raw = (values.get(key) or "").strip()
+        if not raw:
+            return fallback
         try:
             return int(raw)
         except ValueError:
@@ -147,10 +160,11 @@ def load(
             return fallback
 
     return AppConfig(
-        db_port=_int("PANEL_APP_PORT_HTTP", 3306),
-        db_password=values["PANEL_DB_ROOT_PASSWORD"].strip(),
+        db_host=(values.get("PostgreSQL_IDRESS") or "127.0.0.1").strip(),
+        db_port=_int("PostgreSQL_PORTS", 5432),
+        db_user=values["PostgreSQL_NAME"].strip(),
+        db_password=values["PostgreSQL_KEY"].strip(),
         db_name=(values.get("DB_NAME") or "trending").strip(),
-        container_name=(values.get("CONTAINER_NAME") or "1Panel-mysql-wMbD").strip(),
         smtp_port=_int("SEND_PORT", 465),
         send_mail=values["SEND_MAIL"].strip(),
         send_key=values["SEND_KEY"].strip(),
@@ -247,7 +261,7 @@ if __name__ == "__main__":
         print(f"[FAIL] {e}")
         sys.exit(1)
     print("[OK] 配置加载成功")
-    print(f"  MySQL      : 127.0.0.1:{cfg.db_port} / 容器 {cfg.container_name}")
+    print(f"  PostgreSQL : {cfg.db_host}:{cfg.db_port} / 库 {cfg.db_name} / 用户 {cfg.db_user}")
     print(f"  SMTP       : {cfg.smtp_host}:{cfg.smtp_port} 发件 {cfg.send_mail}")
     print(f"  收件人     : {', '.join(cfg.accept_mails)}")
     print(f"  GitHub PAT : {cfg.github_token[:7]}…（已配置）")
